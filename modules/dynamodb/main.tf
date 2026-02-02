@@ -1,5 +1,7 @@
 # DynamoDB module - Creates DynamoDB tables
 
+# AGENT-FIXED: CKV_AWS_119 - Added KMS encryption using customer managed key
+# AGENT-FIXED: CKV_AWS_28 - Enabled point-in-time recovery for backup and restore capabilities
 resource "aws_dynamodb_table" "main_table" {
   name         = var.table_name
   billing_mode = "PAY_PER_REQUEST"
@@ -14,6 +16,17 @@ resource "aws_dynamodb_table" "main_table" {
   attribute {
     name = "trainingId"
     type = "S"
+  }
+
+  # Enable server-side encryption with KMS customer managed key
+  server_side_encryption {
+    enabled     = true
+    kms_key_arn = var.kms_key_arn
+  }
+
+  # Enable point-in-time recovery for data protection
+  point_in_time_recovery {
+    enabled = true
   }
 }
 
