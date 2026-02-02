@@ -116,6 +116,7 @@ resource "aws_iam_role_policy_attachment" "chat_lambda_basic" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
+# AGENT-FIXED: CKV_AWS_237 - Added lifecycle block with create_before_destroy for API Gateway REST API
 # Create API Gateway
 resource "aws_api_gateway_rest_api" "api" {
   name        = var.api_name
@@ -123,6 +124,26 @@ resource "aws_api_gateway_rest_api" "api" {
   
   endpoint_configuration {
     types = ["REGIONAL"]
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+# AGENT-FIXED: CKV2_AWS_53 - Created request validator for API Gateway to validate requests
+resource "aws_api_gateway_request_validator" "validator" {
+  name                        = "${var.api_name}-request-validator"
+  rest_api_id                 = aws_api_gateway_rest_api.api.id
+  validate_request_body       = true
+  validate_request_parameters = true
+}
+
+# AGENT-FIXED: CKV2_AWS_51 - Created client certificate for API Gateway authentication
+resource "aws_api_gateway_client_certificate" "cert" {
+  description = "Client certificate for ${var.api_name}"
+  tags = {
+    Name = "${var.api_name}-client-cert"
   }
 }
 
@@ -165,12 +186,14 @@ resource "aws_api_gateway_resource" "chat" {
 #   authorizer_id   = aws_api_gateway_authorizer.cognito.id
 # }
 
+# AGENT-FIXED: CKV2_AWS_53 - Added request_validator_id to enable request validation
 # Create API methods for user resource
 resource "aws_api_gateway_method" "user_get" {
   rest_api_id   = aws_api_gateway_rest_api.api.id
   resource_id   = aws_api_gateway_resource.user.id
   http_method   = "GET"
-  authorization =  aws_api_gateway_authorizer.cognito.id
+  authorization = aws_api_gateway_authorizer.cognito.id
+  request_validator_id = aws_api_gateway_request_validator.validator.id
 }
 
 # resource "aws_api_gateway_method" "user_post" {
@@ -306,11 +329,77 @@ resource "aws_api_gateway_deployment" "deployment" {
   }
 }
 
+# AGENT-FIXED: CKV_AWS_76 - Added CloudWatch log group for API Gateway access logging
+resource "aws_cloudwatch_log_group" "api_gateway" {
+  name              = "API-Gateway-Execution-Logs_${aws_api_gateway_rest_api.api.id}/prod"
+  retention_in_days = var.log_retention_days
+}
+
+# AGENT-FIXED: CKV_AWS_73 - Enabled X-Ray tracing for API Gateway stage
+# AGENT-FIXED: CKV_AWS_76 - Added access_log_settings for API Gateway stage
+# AGENT-FIXED: CKV2_AWS_51 - Added client_certificate_id to enable client certificate authentication
+# TODO: CKV_AWS_120 - API Gateway caching is not enabled
+# Resource: module.api_gateway.aws_api_gateway_stage.prod
+# Reason: Enabling caching requires business decision on cache size and cost implications
+# Fix: To enable caching:
+#   1. Uncomment the cache_cluster_enabled and cache_cluster_size lines below
+#   2. Choose appropriate cache_cluster_size (0.5, 1.6, 6.1, 13.5, 28.4, 58.2, 118, or 237 GB)
+#   3. Note: API Gateway caching incurs additional hourly charges
+#   4. Consider whether your API workload benefits from caching
+# TODO: CKV2_AWS_29 - API Gateway is not protected by WAF
+# Resource: module.api_gateway.aws_api_gateway_stage.prod
+# Reason: Requires creation or specification of a WAFv2 Web ACL with appropriate rules for the organization
+# Fix: To enable WAF protection:
+#   1. Create or identify an existing aws_wafv2_web_acl resource with scope = "REGIONAL"
+#   2. Define appropriate WAF rules based on security requirements (rate limiting, IP filtering, SQL injection protection, etc.)
+#   3. Create aws_wafv2_web_acl_association resource linking the Web ACL ARN to the stage ARN
+#   4. Example: aws_wafv2_web_acl_association.main with resource_arn = aws_api_gateway_stage.prod.arn
 # Create API Gateway stage
 resource "aws_api_gateway_stage" "prod" {
   deployment_id = aws_api_gateway_deployment.deployment.id
   rest_api_id   = aws_api_gateway_rest_api.api.id
   stage_name    = "prod"
+
+  # Enable client certificate authentication
+  client_certificate_id = aws_api_gateway_client_certificate.cert.id
+
+  # Enable X-Ray tracing
+  xray_tracing_enabled = var.enable_xray_tracing
+
+  # Enable access logging
+  access_log_settings {
+    destination_arn = aws_cloudwatch_log_group.api_gateway.arn
+    format = jsonencode({
+      requestId      = "$context.requestId"
+      ip             = "$context.identity.sourceIp"
+      caller         = "$context.identity.caller"
+      user           = "$context.identity.user"
+      requestTime    = "$context.requestTime"
+      httpMethod     = "$context.httpMethod"
+      resourcePath   = "$context.resourcePath"
+      status         = "$context.status"
+      protocol       = "$context.protocol"
+      responseLength = "$context.responseLength"
+    })
+  }
+
+  # Uncomment to enable caching (requires business decision on cache size and cost)
+  # cache_cluster_enabled = true
+  # cache_cluster_size    = "0.5"
+
+  depends_on = [aws_cloudwatch_log_group.api_gateway]
+}
+
+# AGENT-FIXED: CKV2_AWS_4 - Added method settings to define logging level for API Gateway stage
+resource "aws_api_gateway_method_settings" "all" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  stage_name  = aws_api_gateway_stage.prod.stage_name
+  method_path = "*/*"
+
+  settings {
+    metrics_enabled = var.enable_metrics
+    logging_level   = var.logging_level
+  }
 }
 
 # Create Lambda function zip files

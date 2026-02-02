@@ -1,5 +1,17 @@
 # CORS module for API Gateway resources
 
+# TODO: CKV2_AWS_53 - Request validation is not configured for OPTIONS method
+# Resource: aws_api_gateway_method.options
+# Reason: OPTIONS methods for CORS preflight requests typically don't require request validation
+# Fix: Consider whether request validation is appropriate for CORS OPTIONS method:
+#   1. CORS OPTIONS (preflight) requests are typically made by browsers before actual requests
+#   2. They don't carry request bodies or parameters that need validation
+#   3. Adding validation might break CORS functionality for browser-based applications
+#   4. If validation is required, create a request validator (or reference existing validator from parent module):
+#      - Add request_validator_id parameter to this method
+#      - Reference the validator: request_validator_id = var.request_validator_id
+#   5. Note: Most CORS implementations intentionally skip validation on OPTIONS for compatibility
+#   6. Evaluate based on your specific security requirements and CORS use case
 # Create OPTIONS method
 resource "aws_api_gateway_method" "options" {
   rest_api_id   = var.api_id
