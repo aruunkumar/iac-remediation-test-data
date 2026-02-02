@@ -1,5 +1,128 @@
 # Route53 module - Creates a Route 53 hosted zone and IAM role
 
+# TODO: CKV2_AWS_38 - DNSSEC signing is not enabled for Route53 hosted zone
+# Resource: aws_route53_zone.hosted_zone
+# Reason: Enabling DNSSEC requires creating a KMS key in us-east-1 region with specific configuration, creating a Key Signing Key, and enabling DNSSEC signing. This is complex and has significant implications if not done correctly (potential domain unavailability). Requires organizational planning.
+# Fix: To remediate this finding:
+#   1. Create a KMS key in us-east-1 region with specific configuration for DNSSEC:
+#      provider "aws" {
+#        alias  = "us-east-1"
+#        region = "us-east-1"
+#      }
+#      data "aws_caller_identity" "current" {}
+#      resource "aws_kms_key" "dnssec" {
+#        provider                 = aws.us-east-1
+#        customer_master_key_spec = "ECC_NIST_P256"
+#        deletion_window_in_days  = 7
+#        key_usage                = "SIGN_VERIFY"
+#        policy = jsonencode({
+#          Statement = [
+#            {
+#              Action = [
+#                "kms:DescribeKey",
+#                "kms:GetPublicKey",
+#                "kms:Sign",
+#              ],
+#              Effect = "Allow"
+#              Principal = {
+#                Service = "dnssec-route53.amazonaws.com"
+#              }
+#              Sid      = "Allow Route 53 DNSSEC Service"
+#              Resource = "*"
+#              Condition = {
+#                StringEquals = {
+#                  "aws:SourceAccount" = data.aws_caller_identity.current.account_id
+#                }
+#                ArnLike = {
+#                  "aws:SourceArn" = "arn:aws:route53:::hostedzone/*"
+#                }
+#              }
+#            },
+#            {
+#              Action = "kms:CreateGrant",
+#              Effect = "Allow"
+#              Principal = {
+#                Service = "dnssec-route53.amazonaws.com"
+#              }
+#              Sid      = "Allow Route 53 DNSSEC Service to CreateGrant"
+#              Resource = "*"
+#              Condition = {
+#                Bool = {
+#                  "kms:GrantIsForAWSResource" = "true"
+#                }
+#              }
+#            },
+#            {
+#              Action = "kms:*"
+#              Effect = "Allow"
+#              Principal = {
+#                AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+#              }
+#              Resource = "*"
+#              Sid      = "Enable IAM User Permissions"
+#            }
+#          ]
+#          Version = "2012-10-17"
+#        })
+#      }
+#   2. Create a Key Signing Key (KSK):
+#      resource "aws_route53_key_signing_key" "hosted_zone_ksk" {
+#        hosted_zone_id             = aws_route53_zone.hosted_zone.id
+#        key_management_service_arn = aws_kms_key.dnssec.arn
+#        name                       = "${var.domain_name}-ksk"
+#      }
+#   3. Enable DNSSEC signing:
+#      resource "aws_route53_hosted_zone_dnssec" "hosted_zone_dnssec" {
+#        depends_on = [
+#          aws_route53_key_signing_key.hosted_zone_ksk
+#        ]
+#        hosted_zone_id = aws_route53_key_signing_key.hosted_zone_ksk.hosted_zone_id
+#      }
+#   4. After enabling DNSSEC, you must establish a chain of trust by creating a DS record in the parent zone
+#   5. WARNING: If you need to disable DNSSEC in the future, you must wait until the longest TTL for DS records has expired before disabling to prevent domain unavailability
+
+# TODO: CKV2_AWS_39 - DNS query logging is not enabled for Route53 hosted zone
+# Resource: aws_route53_zone.hosted_zone
+# Reason: Enabling query logging requires creating a CloudWatch Log Group in us-east-1 region, setting up a CloudWatch Log Resource Policy, and has cost implications for log storage. Retention policies are organization-specific.
+# Fix: To remediate this finding:
+#   1. Create a provider alias for us-east-1 (if not already present):
+#      provider "aws" {
+#        alias  = "us-east-1"
+#        region = "us-east-1"
+#      }
+#   2. Create a CloudWatch Log Group in us-east-1:
+#      resource "aws_cloudwatch_log_group" "route53_query_logs" {
+#        provider          = aws.us-east-1
+#        name              = "/aws/route53/${var.domain_name}"
+#        retention_in_days = 30  # Adjust based on your organization's retention policy
+#      }
+#   3. Create a CloudWatch Log Resource Policy to allow Route53 to write logs:
+#      data "aws_iam_policy_document" "route53_query_logging_policy" {
+#        statement {
+#          actions = [
+#            "logs:CreateLogStream",
+#            "logs:PutLogEvents",
+#          ]
+#          resources = ["arn:aws:logs:*:*:log-group:/aws/route53/*"]
+#          principals {
+#            identifiers = ["route53.amazonaws.com"]
+#            type        = "Service"
+#          }
+#        }
+#      }
+#      resource "aws_cloudwatch_log_resource_policy" "route53_query_logging_policy" {
+#        provider        = aws.us-east-1
+#        policy_document = data.aws_iam_policy_document.route53_query_logging_policy.json
+#        policy_name     = "route53-query-logging-policy"
+#      }
+#   4. Enable query logging for the hosted zone:
+#      resource "aws_route53_query_log" "hosted_zone_query_log" {
+#        depends_on = [aws_cloudwatch_log_resource_policy.route53_query_logging_policy]
+#        cloudwatch_log_group_arn = aws_cloudwatch_log_group.route53_query_logs.arn
+#        zone_id                  = aws_route53_zone.hosted_zone.zone_id
+#      }
+#   5. Note: This configuration will incur CloudWatch Logs costs based on log volume and retention period
+
 resource "aws_route53_zone" "hosted_zone" {
   name = var.domain_name
 
