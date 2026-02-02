@@ -32,3 +32,16 @@ variable "lambda_source_dir" {
   description = "The directory containing the Lambda source code"
   type        = string
 }
+
+# AGENT-FIXED: CKV_AWS_120 - Added variables for API Gateway caching configuration
+variable "enable_api_cache" {
+  description = "Enable caching for API Gateway stage (incurs additional costs)"
+  type        = bool
+  default     = false
+}
+
+variable "api_cache_size" {
+  description = "Size of the cache cluster for the stage. Valid values: 0.5, 1.6, 6.1, 13.5, 28.4, 58.2, 118, 237"
+  type        = string
+  default     = "0.5"
+}
