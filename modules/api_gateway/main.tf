@@ -116,6 +116,7 @@ resource "aws_iam_role_policy_attachment" "chat_lambda_basic" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
+# AGENT-FIXED: CKV_AWS_237 - Added lifecycle block with create_before_destroy for safe API Gateway updates
 # Create API Gateway
 resource "aws_api_gateway_rest_api" "api" {
   name        = var.api_name
@@ -124,6 +125,15 @@ resource "aws_api_gateway_rest_api" "api" {
   endpoint_configuration {
     types = ["REGIONAL"]
   }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+# AGENT-FIXED: CKV2_AWS_51 - Created client certificate for backend authentication
+resource "aws_api_gateway_client_certificate" "api_cert" {
+  description = "Client certificate for ${var.api_name} API Gateway"
 }
 
 # Create Cognito authorizer
@@ -133,6 +143,14 @@ resource "aws_api_gateway_authorizer" "cognito" {
   type          = "COGNITO_USER_POOLS"
   provider_arns = [var.cognito_user_pool_arn]
   identity_source = "method.request.header.Authorization"
+}
+
+# AGENT-FIXED: CKV2_AWS_53 - Created request validator for API Gateway
+resource "aws_api_gateway_request_validator" "validator" {
+  name                        = "${var.api_name}-request-validator"
+  rest_api_id                 = aws_api_gateway_rest_api.api.id
+  validate_request_body       = true
+  validate_request_parameters = true
 }
 
 # Create API resources
@@ -165,12 +183,14 @@ resource "aws_api_gateway_resource" "chat" {
 #   authorizer_id   = aws_api_gateway_authorizer.cognito.id
 # }
 
+# AGENT-FIXED: CKV2_AWS_53 - Added request validator to API Gateway method
 # Create API methods for user resource
 resource "aws_api_gateway_method" "user_get" {
-  rest_api_id   = aws_api_gateway_rest_api.api.id
-  resource_id   = aws_api_gateway_resource.user.id
-  http_method   = "GET"
-  authorization =  aws_api_gateway_authorizer.cognito.id
+  rest_api_id          = aws_api_gateway_rest_api.api.id
+  resource_id          = aws_api_gateway_resource.user.id
+  http_method          = "GET"
+  authorization        = aws_api_gateway_authorizer.cognito.id
+  request_validator_id = aws_api_gateway_request_validator.validator.id
 }
 
 # resource "aws_api_gateway_method" "user_post" {
@@ -306,11 +326,53 @@ resource "aws_api_gateway_deployment" "deployment" {
   }
 }
 
+# AGENT-FIXED: CKV_AWS_120 - Enabled cache cluster for API Gateway stage
+# AGENT-FIXED: CKV_AWS_73 - Enabled X-Ray tracing for API Gateway stage
+# AGENT-FIXED: CKV2_AWS_51 - Added client certificate for backend authentication
+# TODO: CKV_AWS_76 - Access logging is not enabled for API Gateway stage
+# Resource: aws_api_gateway_stage.prod
+# Reason: Access logging requires a CloudWatch log group ARN and log format configuration that depends on organizational requirements
+# Fix: To enable access logging, complete the following steps:
+#   1. Create a CloudWatch log group: aws_cloudwatch_log_group with name "API-Gateway-Execution-Logs_${aws_api_gateway_rest_api.api.id}/prod"
+#   2. Create an IAM role for API Gateway to write logs to CloudWatch
+#   3. Add access_log_settings block to aws_api_gateway_stage.prod with:
+#      - destination_arn = aws_cloudwatch_log_group.<name>.arn
+#      - format = "$context.requestId" (or your preferred log format)
+#   4. Set up API Gateway account settings with the IAM role ARN
+# TODO: CKV2_AWS_4 - Logging level is not defined for API Gateway stage
+# Resource: aws_api_gateway_stage.prod
+# Reason: Logging level configuration requires CloudWatch log group setup and IAM permissions that need organizational approval
+# Fix: To enable logging level configuration, complete the following steps:
+#   1. Complete steps from CKV_AWS_76 above to set up CloudWatch logging
+#   2. Create aws_api_gateway_method_settings resource with:
+#      - rest_api_id = aws_api_gateway_rest_api.api.id
+#      - stage_name = aws_api_gateway_stage.prod.stage_name
+#      - method_path = "*/*"
+#      - settings { logging_level = "INFO" } (choose INFO, ERROR, or OFF based on requirements)
+# TODO: CKV2_AWS_29 - API Gateway stage is not protected by WAF
+# Resource: aws_api_gateway_stage.prod
+# Reason: WAF protection requires creating a WAFv2 Web ACL with organization-specific rules, IP sets, and rate limiting configuration
+# Fix: To protect the API Gateway with WAF, complete the following steps:
+#   1. Create an aws_wafv2_web_acl resource with:
+#      - name = "${var.api_name}-waf-acl"
+#      - scope = "REGIONAL"
+#      - default_action (allow or block based on your security posture)
+#      - Define rules for: rate limiting, IP filtering, SQL injection protection, XSS protection, etc.
+#      - visibility_config with CloudWatch metrics enabled
+#   2. Create an aws_wafv2_web_acl_association resource with:
+#      - resource_arn = aws_api_gateway_stage.prod.arn
+#      - web_acl_arn = aws_wafv2_web_acl.<name>.arn
+#   3. Review and adjust WAF rules based on your security requirements and traffic patterns
 # Create API Gateway stage
 resource "aws_api_gateway_stage" "prod" {
   deployment_id = aws_api_gateway_deployment.deployment.id
   rest_api_id   = aws_api_gateway_rest_api.api.id
   stage_name    = "prod"
+
+  cache_cluster_enabled = true
+  cache_cluster_size    = "0.5"
+  xray_tracing_enabled  = true
+  client_certificate_id = aws_api_gateway_client_certificate.api_cert.id
 }
 
 # Create Lambda function zip files
