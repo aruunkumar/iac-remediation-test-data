@@ -116,6 +116,7 @@ resource "aws_iam_role_policy_attachment" "chat_lambda_basic" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
+# AGENT-FIXED: CKV_AWS_237 - Added lifecycle block with create_before_destroy for API Gateway REST API
 # Create API Gateway
 resource "aws_api_gateway_rest_api" "api" {
   name        = var.api_name
@@ -124,6 +125,19 @@ resource "aws_api_gateway_rest_api" "api" {
   endpoint_configuration {
     types = ["REGIONAL"]
   }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+# AGENT-FIXED: CKV2_AWS_53 - Created request validator for API Gateway to validate request parameters and body
+# Create request validator for API Gateway methods
+resource "aws_api_gateway_request_validator" "validator" {
+  name                        = "${var.api_name}-request-validator"
+  rest_api_id                 = aws_api_gateway_rest_api.api.id
+  validate_request_body       = true
+  validate_request_parameters = true
 }
 
 # Create Cognito authorizer
@@ -165,12 +179,14 @@ resource "aws_api_gateway_resource" "chat" {
 #   authorizer_id   = aws_api_gateway_authorizer.cognito.id
 # }
 
+# AGENT-FIXED: CKV2_AWS_53 - Added request_validator_id to enable request validation
 # Create API methods for user resource
 resource "aws_api_gateway_method" "user_get" {
-  rest_api_id   = aws_api_gateway_rest_api.api.id
-  resource_id   = aws_api_gateway_resource.user.id
-  http_method   = "GET"
-  authorization =  aws_api_gateway_authorizer.cognito.id
+  rest_api_id          = aws_api_gateway_rest_api.api.id
+  resource_id          = aws_api_gateway_resource.user.id
+  http_method          = "GET"
+  authorization        = aws_api_gateway_authorizer.cognito.id
+  request_validator_id = aws_api_gateway_request_validator.validator.id
 }
 
 # resource "aws_api_gateway_method" "user_post" {
@@ -306,11 +322,45 @@ resource "aws_api_gateway_deployment" "deployment" {
   }
 }
 
+# AGENT-FIXED: CKV_AWS_73 - Enabled X-Ray tracing for API Gateway stage
+# TODO: CKV2_AWS_51 - Client certificate authentication not enabled
+# Resource: aws_api_gateway_stage.prod
+# Reason: Requires manual intervention - client certificates require coordination with backend services
+# Fix: To enable client certificate authentication:
+#   1. Create an aws_api_gateway_client_certificate resource
+#   2. Add client_certificate_id = aws_api_gateway_client_certificate.example.id to this stage
+#   3. Configure backend services to validate the client certificate
+#   4. Test the integration to ensure backend services properly validate certificates
+# TODO: CKV2_AWS_29 - API Gateway stage not protected by WAF
+# Resource: aws_api_gateway_stage.prod
+# Reason: Requires manual intervention - WAF configuration is an organizational security decision
+# Fix: To protect this API Gateway with WAF:
+#   1. Create or identify an existing aws_wafv2_web_acl resource with appropriate rules
+#   2. Create an aws_wafv2_web_acl_association resource
+#   3. Set resource_arn = aws_api_gateway_stage.prod.arn
+#   4. Set web_acl_arn to the ARN of your WAF Web ACL
+#   5. Define WAF rules based on your organization's security requirements (rate limiting, IP filtering, etc.)
 # Create API Gateway stage
 resource "aws_api_gateway_stage" "prod" {
   deployment_id = aws_api_gateway_deployment.deployment.id
   rest_api_id   = aws_api_gateway_rest_api.api.id
   stage_name    = "prod"
+  
+  xray_tracing_enabled = true
+}
+
+# AGENT-FIXED: CKV_AWS_276 - Disabled data trace logging in API Gateway method settings for security
+# Create method settings to control logging behavior
+resource "aws_api_gateway_method_settings" "all" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  stage_name  = aws_api_gateway_stage.prod.stage_name
+  method_path = "*/*"
+
+  settings {
+    metrics_enabled    = true
+    logging_level      = "ERROR"
+    data_trace_enabled = false
+  }
 }
 
 # Create Lambda function zip files

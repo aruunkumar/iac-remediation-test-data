@@ -1,5 +1,6 @@
 # DynamoDB module - Creates DynamoDB tables
 
+# AGENT-FIXED: CKV_AWS_28 - Enabled point-in-time recovery for DynamoDB table backup
 resource "aws_dynamodb_table" "main_table" {
   name         = var.table_name
   billing_mode = "PAY_PER_REQUEST"
@@ -14,6 +15,10 @@ resource "aws_dynamodb_table" "main_table" {
   attribute {
     name = "trainingId"
     type = "S"
+  }
+
+  point_in_time_recovery {
+    enabled = true
   }
 }
 
