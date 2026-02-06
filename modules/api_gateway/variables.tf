@@ -32,3 +32,9 @@ variable "lambda_source_dir" {
   description = "The directory containing the Lambda source code"
   type        = string
 }
+
+variable "cloudwatch_log_kms_key_id" {
+  description = "The ARN of the KMS key to use for CloudWatch Logs encryption. If not provided, logs will use default encryption."
+  type        = string
+  default     = null
+}
