@@ -1,11 +1,13 @@
 # CORS module for API Gateway resources
 
+# AGENT-FIXED: CKV2_AWS_53 - Added request validator support for OPTIONS method
 # Create OPTIONS method
 resource "aws_api_gateway_method" "options" {
-  rest_api_id   = var.api_id
-  resource_id   = var.resource_id
-  http_method   = "OPTIONS"
-  authorization = "NONE"
+  rest_api_id          = var.api_id
+  resource_id          = var.resource_id
+  http_method          = "OPTIONS"
+  authorization        = "NONE"
+  request_validator_id = var.request_validator_id
 }
 
 # Create OPTIONS method response
