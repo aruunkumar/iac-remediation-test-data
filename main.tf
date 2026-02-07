@@ -50,21 +50,3 @@ module "api_gateway" {
   chat_history_table_name = module.dynamodb.chat_history_table_name
   lambda_source_dir     = "${path.root}/api/lambda"
 }
-
-# CodeRepo Update Module
-# module "code_repo_update" {
-#   source                = "./modules/code_repo_update"
-#   app_name              = var.app_name
-#   ui_app_title          = var.ui_app_title
-#   amplify_branch_name   = var.amplify_branch_name
-#   amplify_app_id        = module.amplify.amplify_app_id
-#   domain_name           = var.domain_name
-#   is_custom_domain      = var.is_custom_domain
-#   region                = var.region
-#   oidc_domain_prefix    = var.oidc_domain_prefix
-#   cognito_user_pool_id  = module.cognito.user_pool_id
-#   cognito_app_client_id = module.cognito.app_client_id
-#   api_id                = module.api_gateway.api_id
-#   repo_name             = module.amplify.repo_name
-#   depends_on            = [module.amplify, module.cognito, module.api_gateway]
-# }
