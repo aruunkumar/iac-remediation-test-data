@@ -116,6 +116,7 @@ resource "aws_iam_role_policy_attachment" "chat_lambda_basic" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
+# AGENT-FIXED: CKV_AWS_237 - Added lifecycle policy with create_before_destroy to prevent API downtime during updates
 # Create API Gateway
 resource "aws_api_gateway_rest_api" "api" {
   name        = var.api_name
@@ -123,6 +124,10 @@ resource "aws_api_gateway_rest_api" "api" {
   
   endpoint_configuration {
     types = ["REGIONAL"]
+  }
+
+  lifecycle {
+    create_before_destroy = true
   }
 }
 
@@ -165,12 +170,23 @@ resource "aws_api_gateway_resource" "chat" {
 #   authorizer_id   = aws_api_gateway_authorizer.cognito.id
 # }
 
+# AGENT-FIXED: CKV2_AWS_53 - Created request validator to validate API requests
+# Create request validator for API Gateway
+resource "aws_api_gateway_request_validator" "validator" {
+  name                        = "${var.api_name}-request-validator"
+  rest_api_id                 = aws_api_gateway_rest_api.api.id
+  validate_request_body       = true
+  validate_request_parameters = true
+}
+
+# AGENT-FIXED: CKV2_AWS_53 - Added request validator to method to ensure request validation
 # Create API methods for user resource
 resource "aws_api_gateway_method" "user_get" {
-  rest_api_id   = aws_api_gateway_rest_api.api.id
-  resource_id   = aws_api_gateway_resource.user.id
-  http_method   = "GET"
-  authorization =  aws_api_gateway_authorizer.cognito.id
+  rest_api_id          = aws_api_gateway_rest_api.api.id
+  resource_id          = aws_api_gateway_resource.user.id
+  http_method          = "GET"
+  authorization        = aws_api_gateway_authorizer.cognito.id
+  request_validator_id = aws_api_gateway_request_validator.validator.id
 }
 
 # resource "aws_api_gateway_method" "user_post" {
@@ -306,11 +322,162 @@ resource "aws_api_gateway_deployment" "deployment" {
   }
 }
 
+# AGENT-FIXED: CKV2_AWS_51 - Created client certificate for backend authentication
+# Create client certificate for API Gateway
+resource "aws_api_gateway_client_certificate" "cert" {
+  description = "Client certificate for ${var.api_name} API Gateway"
+}
+
+# AGENT-FIXED: CKV_AWS_76 - Created CloudWatch Log Group for API Gateway access logs
+# Create CloudWatch Log Group for API Gateway execution logs
+resource "aws_cloudwatch_log_group" "api_gateway_logs" {
+  name              = "API-Gateway-Execution-Logs_${aws_api_gateway_rest_api.api.id}/prod"
+  retention_in_days = var.log_retention_days
+}
+
+# AGENT-FIXED: CKV2_AWS_29 - Created WAF Web ACL with AWS Managed Rules for baseline protection
+# Create WAF Web ACL for API Gateway protection
+resource "aws_wafv2_web_acl" "api_gateway_waf" {
+  name  = "${var.api_name}-waf-acl"
+  scope = "REGIONAL"
+
+  default_action {
+    allow {}
+  }
+
+  # AWS Managed Rules - Common Rule Set for baseline protection
+  rule {
+    name     = "AWSManagedRulesCommonRuleSet"
+    priority = 1
+
+    override_action {
+      none {}
+    }
+
+    statement {
+      managed_rule_group_statement {
+        vendor_name = "AWS"
+        name        = "AWSManagedRulesCommonRuleSet"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "${var.api_name}-waf-common-rules"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  # AWS Managed Rules - Known Bad Inputs Rule Set
+  rule {
+    name     = "AWSManagedRulesKnownBadInputsRuleSet"
+    priority = 2
+
+    override_action {
+      none {}
+    }
+
+    statement {
+      managed_rule_group_statement {
+        vendor_name = "AWS"
+        name        = "AWSManagedRulesKnownBadInputsRuleSet"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "${var.api_name}-waf-bad-inputs"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  # Rate limiting rule to prevent abuse
+  rule {
+    name     = "RateLimitRule"
+    priority = 3
+
+    action {
+      block {}
+    }
+
+    statement {
+      rate_based_statement {
+        limit              = var.waf_rate_limit
+        aggregate_key_type = "IP"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "${var.api_name}-waf-rate-limit"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  visibility_config {
+    cloudwatch_metrics_enabled = true
+    metric_name                = "${var.api_name}-waf-acl"
+    sampled_requests_enabled   = true
+  }
+}
+
+# AGENT-FIXED: CKV2_AWS_29 - Associated WAF Web ACL with API Gateway stage
+# Associate WAF Web ACL with API Gateway stage
+resource "aws_wafv2_web_acl_association" "api_gateway_waf_association" {
+  resource_arn = aws_api_gateway_stage.prod.arn
+  web_acl_arn  = aws_wafv2_web_acl.api_gateway_waf.arn
+}
+
+# AGENT-FIXED: CKV_AWS_120 - Enabled API Gateway caching to improve performance and reduce backend load
+# AGENT-FIXED: CKV_AWS_73 - Enabled X-Ray tracing for distributed tracing and performance insights
+# AGENT-FIXED: CKV2_AWS_51 - Added client certificate for mutual TLS authentication with backend
+# AGENT-FIXED: CKV_AWS_76 - Added access logging with CloudWatch Logs destination and standard format
 # Create API Gateway stage
 resource "aws_api_gateway_stage" "prod" {
-  deployment_id = aws_api_gateway_deployment.deployment.id
-  rest_api_id   = aws_api_gateway_rest_api.api.id
-  stage_name    = "prod"
+  deployment_id         = aws_api_gateway_deployment.deployment.id
+  rest_api_id           = aws_api_gateway_rest_api.api.id
+  stage_name            = "prod"
+  client_certificate_id = aws_api_gateway_client_certificate.cert.id
+  
+  cache_cluster_enabled = true
+  cache_cluster_size    = "0.5"
+  xray_tracing_enabled  = true
+
+  access_log_settings {
+    destination_arn = aws_cloudwatch_log_group.api_gateway_logs.arn
+    format = jsonencode({
+      requestId      = "$context.requestId"
+      ip             = "$context.identity.sourceIp"
+      caller         = "$context.identity.caller"
+      user           = "$context.identity.user"
+      requestTime    = "$context.requestTime"
+      httpMethod     = "$context.httpMethod"
+      resourcePath   = "$context.resourcePath"
+      status         = "$context.status"
+      protocol       = "$context.protocol"
+      responseLength = "$context.responseLength"
+    })
+  }
+
+  depends_on = [aws_cloudwatch_log_group.api_gateway_logs]
+}
+
+# AGENT-FIXED: CKV_AWS_225 - Enabled caching in method settings to improve API performance and reduce latency
+# AGENT-FIXED: CKV2_AWS_4 - Configured logging level for API Gateway methods to enable CloudWatch logging
+# Configure method settings for logging and caching
+resource "aws_api_gateway_method_settings" "all" {
+  rest_api_id = aws_api_gateway_rest_api.api.id
+  stage_name  = aws_api_gateway_stage.prod.stage_name
+  method_path = "*/*"
+
+  settings {
+    metrics_enabled        = true
+    logging_level          = "INFO"
+    data_trace_enabled     = false
+    caching_enabled        = true
+    cache_ttl_in_seconds   = 300
+    cache_data_encrypted   = true
+  }
 }
 
 # Create Lambda function zip files

@@ -32,3 +32,17 @@ variable "lambda_source_dir" {
   description = "The directory containing the Lambda source code"
   type        = string
 }
+
+# AGENT-FIXED: CKV_AWS_76 - Added variable for CloudWatch log retention
+variable "log_retention_days" {
+  description = "The number of days to retain API Gateway logs in CloudWatch"
+  type        = number
+  default     = 7
+}
+
+# AGENT-FIXED: CKV2_AWS_29 - Added variable for WAF rate limiting
+variable "waf_rate_limit" {
+  description = "The maximum number of requests from a single IP address allowed in a 5-minute period"
+  type        = number
+  default     = 2000
+}
