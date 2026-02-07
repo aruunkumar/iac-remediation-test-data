@@ -32,3 +32,16 @@ variable "lambda_source_dir" {
   description = "The directory containing the Lambda source code"
   type        = string
 }
+
+# Variables added for security remediation
+variable "enable_api_cache" {
+  description = "Enable cache cluster for the API Gateway stage"
+  type        = bool
+  default     = true
+}
+
+variable "api_cache_size" {
+  description = "Size of the cache cluster for the API Gateway stage. Valid values: 0.5, 1.6, 6.1, 13.5, 28.4, 58.2, 118, 237"
+  type        = string
+  default     = "0.5"
+}

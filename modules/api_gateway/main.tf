@@ -116,6 +116,7 @@ resource "aws_iam_role_policy_attachment" "chat_lambda_basic" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
+# AGENT-FIXED: CKV_AWS_237 - Added create_before_destroy lifecycle policy to ensure zero-downtime updates
 # Create API Gateway
 resource "aws_api_gateway_rest_api" "api" {
   name        = var.api_name
@@ -123,6 +124,19 @@ resource "aws_api_gateway_rest_api" "api" {
   
   endpoint_configuration {
     types = ["REGIONAL"]
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+# AGENT-FIXED: CKV2_AWS_51 - Added client certificate for backend authentication
+resource "aws_api_gateway_client_certificate" "api_cert" {
+  description = "Client certificate for ${var.api_name} API Gateway"
+  
+  tags = {
+    Name = "${var.api_name}-client-cert"
   }
 }
 
@@ -133,6 +147,14 @@ resource "aws_api_gateway_authorizer" "cognito" {
   type          = "COGNITO_USER_POOLS"
   provider_arns = [var.cognito_user_pool_arn]
   identity_source = "method.request.header.Authorization"
+}
+
+# AGENT-FIXED: CKV2_AWS_53 - Added request validator for API Gateway methods
+resource "aws_api_gateway_request_validator" "validator" {
+  name                        = "${var.api_name}-request-validator"
+  rest_api_id                 = aws_api_gateway_rest_api.api.id
+  validate_request_body       = true
+  validate_request_parameters = true
 }
 
 # Create API resources
@@ -165,12 +187,14 @@ resource "aws_api_gateway_resource" "chat" {
 #   authorizer_id   = aws_api_gateway_authorizer.cognito.id
 # }
 
+# AGENT-FIXED: CKV2_AWS_53 - Added request_validator_id to enable request validation
 # Create API methods for user resource
 resource "aws_api_gateway_method" "user_get" {
-  rest_api_id   = aws_api_gateway_rest_api.api.id
-  resource_id   = aws_api_gateway_resource.user.id
-  http_method   = "GET"
-  authorization =  aws_api_gateway_authorizer.cognito.id
+  rest_api_id          = aws_api_gateway_rest_api.api.id
+  resource_id          = aws_api_gateway_resource.user.id
+  http_method          = "GET"
+  authorization        = aws_api_gateway_authorizer.cognito.id
+  request_validator_id = aws_api_gateway_request_validator.validator.id
 }
 
 # resource "aws_api_gateway_method" "user_post" {
@@ -306,11 +330,76 @@ resource "aws_api_gateway_deployment" "deployment" {
   }
 }
 
+# AGENT-FIXED: CKV_AWS_120 - Enabled cache cluster for API Gateway stage with configurable size
+# AGENT-FIXED: CKV_AWS_73 - Enabled X-Ray tracing for distributed tracing and performance monitoring
+# AGENT-FIXED: CKV2_AWS_51 - Added client certificate for secure backend authentication
+# TODO: CKV_AWS_76 - API Gateway Access Logging is not enabled
+# Resource: aws_api_gateway_stage.prod
+# Reason: Access logging requires a CloudWatch Log Group ARN and IAM role with appropriate permissions,
+#         which are organization-specific and should be configured based on logging requirements
+# Fix: To enable access logging:
+#   1. Create a CloudWatch Log Group: aws_cloudwatch_log_group with name pattern "API-Gateway-Execution-Logs_${aws_api_gateway_rest_api.api.id}/prod"
+#   2. Create an IAM role for API Gateway with permissions to write to CloudWatch Logs
+#   3. Add access_log_settings block to this stage with destination_arn pointing to the log group
+#   4. Example:
+#      access_log_settings {
+#        destination_arn = aws_cloudwatch_log_group.api_gateway.arn
+#        format = "$context.requestId"
+#      }
+# TODO: CKV2_AWS_4 - API Gateway stage does not have appropriate logging level defined
+# Resource: aws_api_gateway_stage.prod
+# Reason: Logging level requires aws_api_gateway_method_settings resource and CloudWatch Log Group setup.
+#         This also depends on the access logging configuration (CKV_AWS_76) being in place first.
+# Fix: To configure logging level:
+#   1. First, complete the access logging setup from CKV_AWS_76 above
+#   2. Create aws_api_gateway_method_settings resource with method_path = "*/*"
+#   3. Set logging_level in settings block to "ERROR" or "INFO" based on requirements
+#   4. Example:
+#      resource "aws_api_gateway_method_settings" "all" {
+#        rest_api_id = aws_api_gateway_rest_api.api.id
+#        stage_name  = aws_api_gateway_stage.prod.stage_name
+#        method_path = "*/*"
+#        settings {
+#          logging_level   = "ERROR"
+#          metrics_enabled = true
+#        }
+#      }
+# TODO: CKV2_AWS_29 - API Gateway stage is not protected by WAF
+# Resource: aws_api_gateway_stage.prod
+# Reason: WAF protection requires creating a WAFv2 Web ACL with organization-specific rules and rate limits.
+#         This is a complex configuration that needs security team input for appropriate rules.
+# Fix: To enable WAF protection:
+#   1. Create an aws_wafv2_web_acl resource with scope = "REGIONAL"
+#   2. Define security rules based on organizational requirements (rate limiting, geo-blocking, IP filtering, etc.)
+#   3. Configure visibility settings for CloudWatch metrics
+#   4. Create aws_wafv2_web_acl_association to associate the Web ACL with the stage
+#   5. Example:
+#      resource "aws_wafv2_web_acl" "api_waf" {
+#        name  = "${var.api_name}-waf"
+#        scope = "REGIONAL"
+#        default_action { allow {} }
+#        visibility_config {
+#          cloudwatch_metrics_enabled = true
+#          metric_name                = "${var.api_name}-waf-metrics"
+#          sampled_requests_enabled   = true
+#        }
+#      }
+#      resource "aws_wafv2_web_acl_association" "api_waf_association" {
+#        resource_arn = aws_api_gateway_stage.prod.arn
+#        web_acl_arn  = aws_wafv2_web_acl.api_waf.arn
+#      }
 # Create API Gateway stage
 resource "aws_api_gateway_stage" "prod" {
   deployment_id = aws_api_gateway_deployment.deployment.id
   rest_api_id   = aws_api_gateway_rest_api.api.id
   stage_name    = "prod"
+
+  cache_cluster_enabled = var.enable_api_cache
+  cache_cluster_size    = var.api_cache_size
+
+  xray_tracing_enabled = true
+  
+  client_certificate_id = aws_api_gateway_client_certificate.api_cert.id
 }
 
 # Create Lambda function zip files
