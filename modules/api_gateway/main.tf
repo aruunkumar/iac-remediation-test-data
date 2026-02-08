@@ -81,15 +81,43 @@ resource "aws_iam_role_policy_attachment" "chat_lambda_basic" {
 }
 
 # AGENT-FIXED: CKV_AWS_76 - Added CloudWatch Log Group for API Gateway access logs
+# AGENT-FIXED: CKV_AWS_338 - Set retention_in_days to 365 days (1 year minimum)
+# TODO: CKV_AWS_158 - CloudWatch log group requires KMS encryption
+# Resource: aws_cloudwatch_log_group.api_gateway_access_logs
+# Reason: KMS encryption requires a KMS key to be provisioned and proper key policies configured, which are organization-specific decisions
+# Fix: To remediate this issue:
+#   1. Create or reference a KMS key for CloudWatch Logs encryption:
+#      resource "aws_kms_key" "cloudwatch_logs" {
+#        description             = "KMS key for CloudWatch Logs encryption"
+#        deletion_window_in_days = 10
+#        enable_key_rotation     = true
+#      }
+#   2. Add kms_key_id to this log group:
+#      kms_key_id = aws_kms_key.cloudwatch_logs.arn
+#   3. Update the KMS key policy to allow CloudWatch Logs service to use the key
 resource "aws_cloudwatch_log_group" "api_gateway_access_logs" {
   name              = "/aws/apigateway/${var.api_name}/access-logs"
-  retention_in_days = 7
+  retention_in_days = 365
 }
 
 # AGENT-FIXED: CKV2_AWS_4 - Added CloudWatch Log Group for API Gateway execution logs
+# AGENT-FIXED: CKV_AWS_338 - Set retention_in_days to 365 days (1 year minimum)
+# TODO: CKV_AWS_158 - CloudWatch log group requires KMS encryption
+# Resource: aws_cloudwatch_log_group.api_gateway_execution_logs
+# Reason: KMS encryption requires a KMS key to be provisioned and proper key policies configured, which are organization-specific decisions
+# Fix: To remediate this issue:
+#   1. Create or reference a KMS key for CloudWatch Logs encryption:
+#      resource "aws_kms_key" "cloudwatch_logs" {
+#        description             = "KMS key for CloudWatch Logs encryption"
+#        deletion_window_in_days = 10
+#        enable_key_rotation     = true
+#      }
+#   2. Add kms_key_id to this log group:
+#      kms_key_id = aws_kms_key.cloudwatch_logs.arn
+#   3. Update the KMS key policy to allow CloudWatch Logs service to use the key
 resource "aws_cloudwatch_log_group" "api_gateway_execution_logs" {
   name              = "API-Gateway-Execution-Logs_${aws_api_gateway_rest_api.api.id}/prod"
-  retention_in_days = 7
+  retention_in_days = 365
 }
 
 # AGENT-FIXED: CKV_AWS_76, CKV2_AWS_4 - Created IAM role for API Gateway CloudWatch logging
@@ -111,6 +139,8 @@ resource "aws_iam_role" "api_gateway_cloudwatch" {
   assume_role_policy = data.aws_iam_policy_document.api_gateway_cloudwatch_assume_role.json
 }
 
+# AGENT-FIXED: CKV_AWS_356 - Restricted resources from "*" to specific log group ARNs
+# AGENT-FIXED: CKV_AWS_111 - Restricted write access to specific log group resources instead of "*"
 data "aws_iam_policy_document" "api_gateway_cloudwatch_policy" {
   statement {
     effect = "Allow"
@@ -125,7 +155,12 @@ data "aws_iam_policy_document" "api_gateway_cloudwatch_policy" {
       "logs:FilterLogEvents",
     ]
 
-    resources = ["*"]
+    resources = [
+      aws_cloudwatch_log_group.api_gateway_access_logs.arn,
+      "${aws_cloudwatch_log_group.api_gateway_access_logs.arn}:*",
+      aws_cloudwatch_log_group.api_gateway_execution_logs.arn,
+      "${aws_cloudwatch_log_group.api_gateway_execution_logs.arn}:*"
+    ]
   }
 }
 
@@ -304,15 +339,19 @@ resource "aws_api_gateway_stage" "prod" {
 }
 
 # AGENT-FIXED: CKV2_AWS_4 - Added method settings with logging level for execution logs
+# AGENT-FIXED: CKV_AWS_225 - Enabled caching at the method level to improve performance and reduce backend load
+# AGENT-FIXED: CKV_AWS_308 - Enabled cache encryption to protect cached responses
 resource "aws_api_gateway_method_settings" "all" {
   rest_api_id = aws_api_gateway_rest_api.api.id
   stage_name  = aws_api_gateway_stage.prod.stage_name
   method_path = "*/*"
 
   settings {
-    metrics_enabled    = true
-    logging_level      = "ERROR"
-    data_trace_enabled = false
+    metrics_enabled     = true
+    logging_level       = "ERROR"
+    data_trace_enabled  = false
+    caching_enabled     = true
+    cache_data_encrypted = true
   }
 }
 

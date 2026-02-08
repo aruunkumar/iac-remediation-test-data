@@ -49,9 +49,58 @@
 # Note: Route53 query logging requires resources to be in us-east-1 region per AWS requirements
 data "aws_caller_identity" "current" {}
 
+# AGENT-FIXED: CKV_AWS_338 - Set retention_in_days to 365 days (1 year minimum)
+# TODO: CKV_AWS_158 - CloudWatch log group requires KMS encryption
+# Resource: aws_cloudwatch_log_group.route53_query_log
+# Reason: KMS encryption requires a KMS key to be provisioned and proper key policies configured, which are organization-specific decisions
+# Fix: To remediate this issue:
+#   1. Create or reference a KMS key for CloudWatch Logs encryption:
+#      resource "aws_kms_key" "cloudwatch_logs" {
+#        description             = "KMS key for CloudWatch Logs encryption"
+#        deletion_window_in_days = 10
+#        enable_key_rotation     = true
+#        policy = jsonencode({
+#          Version = "2012-10-17"
+#          Statement = [
+#            {
+#              Sid    = "Enable IAM User Permissions"
+#              Effect = "Allow"
+#              Principal = {
+#                AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+#              }
+#              Action   = "kms:*"
+#              Resource = "*"
+#            },
+#            {
+#              Sid    = "Allow CloudWatch Logs"
+#              Effect = "Allow"
+#              Principal = {
+#                Service = "logs.amazonaws.com"
+#              }
+#              Action = [
+#                "kms:Encrypt",
+#                "kms:Decrypt",
+#                "kms:ReEncrypt*",
+#                "kms:GenerateDataKey*",
+#                "kms:CreateGrant",
+#                "kms:DescribeKey"
+#              ]
+#              Resource = "*"
+#              Condition = {
+#                ArnLike = {
+#                  "kms:EncryptionContext:aws:logs:arn" = "arn:aws:logs:*:${data.aws_caller_identity.current.account_id}:log-group:/aws/route53/*"
+#                }
+#              }
+#            }
+#          ]
+#        })
+#      }
+#   2. Add kms_key_id to this log group:
+#      kms_key_id = aws_kms_key.cloudwatch_logs.arn
+#   3. Ensure the KMS key is in the same region as the log group
 resource "aws_cloudwatch_log_group" "route53_query_log" {
   name              = "/aws/route53/${var.domain_name}"
-  retention_in_days = 7
+  retention_in_days = 365
 
   tags = {
     Name        = "route53-query-logs-${var.domain_name}"
