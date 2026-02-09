@@ -62,21 +62,5 @@ resource "aws_amplify_domain_association" "custom_domain" {
   }
 }
 
-# Upload UI code to CodeCommit repository
-# Note: In a real implementation, you would use a more robust approach to upload code
-# This is a simplified version using local-exec provisioner
-# resource "null_resource" "upload_ui_code" {
-#   triggers = {
-#     ui_source_dir_hash = sha256(join("", [for f in fileset(var.ui_source_dir, "**") : filesha256("${var.ui_source_dir}/${f}")]))
-#   }
-
-#   provisioner "local-exec" {
-#     command = <<-EOT
-#       # This is a placeholder for the code upload logic
-#       # In a real implementation, you would use AWS CLI or other tools to upload code to CodeCommit
-#       echo "Uploading UI code to CodeCommit repository ${aws_codecommit_repository.ui_repo.repository_name}"
-#     EOT
-#   }
-
 #   depends_on = [aws_codecommit_repository.ui_repo]
 # }
